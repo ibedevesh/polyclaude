@@ -1,6 +1,12 @@
-# polyclaude
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ibedevesh/polyclaude/main/polyclaude.png" alt="polyclaude — use OpenAI, Gemini, and any OpenAI-compatible model inside the Claude Code CLI" width="100%">
+</p>
 
-**Use OpenAI, Gemini, or any OpenAI-compatible model inside the Claude Code CLI.**
+<p align="center">
+  <a href="https://pypi.org/project/polyclaude/"><img src="https://img.shields.io/pypi/v/polyclaude.svg" alt="PyPI version"></a>
+  <img src="https://img.shields.io/pypi/pyversions/polyclaude.svg" alt="Python versions">
+  <a href="https://github.com/ibedevesh/polyclaude/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/polyclaude.svg" alt="License"></a>
+</p>
 
 Claude Code is a great terminal coding agent — but it only talks to Anthropic's
 models. `polyclaude` lets you keep the exact Claude Code experience (its UI,
@@ -155,3 +161,9 @@ service of Claude Code and of whichever model provider you use.
 ## License
 
 MIT © Devesh Pratap
+
+## Star History
+
+<a href="https://star-history.com/#ibedevesh/polyclaude&Date">
+  <img src="https://api.star-history.com/svg?repos=ibedevesh/polyclaude&type=Date" alt="Star History Chart" width="70%">
+</a>
