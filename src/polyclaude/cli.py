@@ -93,6 +93,15 @@ def main(argv=None):
     ap.add_argument("--system", help="replace the whole main system prompt with this file")
     ap.add_argument("--reasoning", choices=["low", "medium", "high"],
                     help="OpenAI reasoning depth (default high)")
+    ap.add_argument("--reskin", action="store_true",
+                    help="cosmetic: recolor the UI green and relabel it polyclaude "
+                         "(also shows the real model name)")
+    ap.add_argument("--hue", type=float, default=110.0,
+                    help="reskin accent hue rotation, degrees (default 110 = green)")
+    ap.add_argument("--resume", nargs="?", const="", default=None, metavar="SESSION",
+                    help="resume a previous session (forwarded to Claude Code)")
+    ap.add_argument("--continue", dest="cont", action="store_true",
+                    help="continue the most recent session (forwarded to Claude Code)")
     ap.add_argument("--port", type=int, default=8118, help="proxy port (default 8118)")
     ap.add_argument("--list", action="store_true", help="list providers and exit")
     ap.add_argument("--verbose", action="store_true", help="print the wire log path")
@@ -189,13 +198,33 @@ def main(argv=None):
         print(f"  wire log: tail -f {log}")
     print(f"  launching Claude Code (Ctrl-C to exit)\n")
 
+    # forward session flags to Claude Code (it has native --resume/--continue)
+    fwd = []
+    if args.cont:
+        fwd.append("--continue")
+    if args.resume is not None:
+        fwd.append("--resume")
+        if args.resume:
+            fwd.append(args.resume)
+    passthrough = fwd + passthrough
+
     run_env = os.environ.copy()
     run_env["HTTPS_PROXY"] = f"http://127.0.0.1:{port}"
     run_env["NODE_EXTRA_CA_CERTS"] = str(CA)
     run_env.setdefault("ANTHROPIC_API_KEY", "sk-polyclaude-bridge")
     cmd = [claude, *passthrough]
+
     try:
-        rc = subprocess.call(cmd, env=run_env)
+        if args.reskin:
+            # the reskin module reads these from the environment at import
+            os.environ["POLYCLAUDE_HUE"] = str(args.hue)
+            os.environ["POLYCLAUDE_REBRAND"] = (
+                "Claude Code=polyclaude,"
+                f"Claude Opus 5={model},Opus 5={model},Sonnet 4.5={model}")
+            from . import reskin
+            rc = reskin.run(cmd, env=run_env)
+        else:
+            rc = subprocess.call(cmd, env=run_env)
     except KeyboardInterrupt:
         rc = 130
     _cleanup()

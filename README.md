@@ -92,6 +92,29 @@ system prompt with `--system path/to/file.md`.
 
 ---
 
+## Resume a session
+
+Claude Code keeps your conversations; resume them straight through polyclaude:
+
+```bash
+polyclaude --gemini --continue     # continue the most recent session
+polyclaude --gemini --resume       # pick one from a list
+```
+
+## Reskin (optional, cosmetic)
+
+By default the welcome screen still reads "Claude Code" and shows a Claude model
+name even though another model is answering. `--reskin` recolors the UI, relabels
+it to **polyclaude**, and shows the **real** model name:
+
+```bash
+polyclaude --gemini --reskin              # green accent + polyclaude label
+polyclaude --openai --reskin --hue 200    # a different accent colour
+```
+
+This is display-only — it rewrites the terminal output as it's drawn; the Claude
+Code binary is never modified and your keystrokes pass through untouched.
+
 ## How it works
 
 `polyclaude` starts [mitmproxy](https://mitmproxy.org) locally with a small
