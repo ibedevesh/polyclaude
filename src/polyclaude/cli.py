@@ -46,6 +46,20 @@ def _profile_path(name):
     return str(bundled) if bundled.exists() else None
 
 
+def _logged_in():
+    """True if the user has a claude.ai session (so we must NOT also set a key)."""
+    try:
+        if sys.platform == "darwin":
+            r = subprocess.run(
+                ["security", "find-generic-password", "-s",
+                 "Claude Code-credentials"], capture_output=True)
+            if r.returncode == 0:
+                return True
+    except Exception:
+        pass
+    return (Path.home() / ".claude" / ".credentials.json").exists()
+
+
 def _free_port(start):
     for p in range(start, start + 40):
         with socket.socket() as s:
@@ -211,7 +225,12 @@ def main(argv=None):
     run_env = os.environ.copy()
     run_env["HTTPS_PROXY"] = f"http://127.0.0.1:{port}"
     run_env["NODE_EXTRA_CA_CERTS"] = str(CA)
-    run_env.setdefault("ANTHROPIC_API_KEY", "sk-polyclaude-bridge")
+    # Claude Code refuses to call the API with no credential ("Please run
+    # /login"). If the user is already logged into claude.ai, leave auth alone
+    # (setting a key too triggers a conflict warning); otherwise supply a dummy
+    # key — the bridge answers regardless and never checks it.
+    if not _logged_in() and "ANTHROPIC_API_KEY" not in os.environ:
+        run_env["ANTHROPIC_API_KEY"] = "sk-polyclaude-bridge"
     cmd = [claude, *passthrough]
 
     try:
