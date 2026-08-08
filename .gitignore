@@ -1,0 +1,29 @@
+# secrets — never commit
+.env
+.env.*
+*.key
+*.pem
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.eggs/
+
+# tooling
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# os / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# runtime logs
+/tmp/polyclaude*.log
