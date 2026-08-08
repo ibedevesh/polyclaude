@@ -107,11 +107,8 @@ def main(argv=None):
     ap.add_argument("--system", help="replace the whole main system prompt with this file")
     ap.add_argument("--reasoning", choices=["low", "medium", "high"],
                     help="OpenAI reasoning depth (default high)")
-    ap.add_argument("--reskin", action="store_true",
-                    help="cosmetic: recolor the UI green and relabel it polyclaude "
-                         "(also shows the real model name)")
     ap.add_argument("--hue", type=float, default=110.0,
-                    help="reskin accent hue rotation, degrees (default 110 = green)")
+                    help="accent hue for the branding, degrees (default 110 = green)")
     ap.add_argument("--resume", nargs="?", const="", default=None, metavar="SESSION",
                     help="resume a previous session (forwarded to Claude Code)")
     ap.add_argument("--continue", dest="cont", action="store_true",
@@ -232,10 +229,14 @@ def main(argv=None):
     if not _logged_in() and "ANTHROPIC_API_KEY" not in os.environ:
         run_env["ANTHROPIC_API_KEY"] = "sk-polyclaude-bridge"
     cmd = [claude, *passthrough]
+    # brand the UI for real interactive sessions; skip only for non-interactive
+    # / piped runs (`-p`), which have no welcome screen to brand.
+    interactive = not any(a in ("-p", "--print") for a in passthrough)
+    reskin_active = (interactive and sys.stdin.isatty()
+                     and os.environ.get("POLYCLAUDE_NO_RESKIN") != "1")
 
     try:
-        if args.reskin:
-            # the reskin module reads these from the environment at import
+        if reskin_active:
             os.environ["POLYCLAUDE_HUE"] = str(args.hue)
             os.environ["POLYCLAUDE_REBRAND"] = (
                 "Claude Code=polyclaude,"

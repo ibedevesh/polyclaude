@@ -107,15 +107,14 @@ polyclaude --gemini --continue     # continue the most recent session
 polyclaude --gemini --resume       # pick one from a list
 ```
 
-## Reskin (optional, cosmetic)
+## Branding
 
-By default the welcome screen still reads "Claude Code" and shows a Claude model
-name even though another model is answering. `--reskin` recolors the UI, relabels
-it to **polyclaude**, and shows the **real** model name:
+Interactive sessions are branded **polyclaude** automatically: a green accent,
+the polyclaude name, and — importantly — the **real model name** in the header
+instead of a Claude model name. Change the accent colour with `--hue`:
 
 ```bash
-polyclaude --gemini --reskin              # green accent + polyclaude label
-polyclaude --openai --reskin --hue 200    # a different accent colour
+polyclaude --openai --hue 200     # blue accent instead of green
 ```
 
 This is display-only — it rewrites the terminal output as it's drawn; the Claude
