@@ -38,6 +38,35 @@ MAX_TOK = int(os.environ.get("POLYCLAUDE_MAXTOK", "32768"))
 MAXCONT = int(os.environ.get("POLYCLAUDE_MAXCONT", "4"))
 LOG = os.environ.get("POLYCLAUDE_LOG", "")
 
+# --- identity scrub / inspect -------------------------------------------------
+# POLYCLAUDE_SCRUB=1            enable rewriting of the outgoing payload
+# POLYCLAUDE_IDENTITY_MAP      "old=new,old2=new2" literal replacements, applied
+#                              to every text field in system + messages
+# POLYCLAUDE_SCRUB_LOG         path to write an inspection report of every
+#                              identity signal found in the request (before scrub)
+SCRUB = os.environ.get("POLYCLAUDE_SCRUB", "0") == "1"
+SCRUB_LOG = os.environ.get("POLYCLAUDE_SCRUB_LOG", "")
+# regex rewrites — no need to know the real value; matches any email / home path
+ID_EMAIL = os.environ.get("POLYCLAUDE_ID_EMAIL", "")   # replace every email with this
+ID_HOME = os.environ.get("POLYCLAUDE_ID_HOME", "")     # replace home-dir username with this
+SCRUB_HEADERS = os.environ.get("POLYCLAUDE_SCRUB_HEADERS", "0") == "1"
+# passthrough = talk to the REAL Anthropic model; scrub on the way out, forward upstream
+PASSTHROUGH = os.environ.get("POLYCLAUDE_PASSTHROUGH", "0") == "1"
+
+
+def _identity_map():
+    m = {}
+    for pair in os.environ.get("POLYCLAUDE_IDENTITY_MAP", "").split(","):
+        if "=" in pair:
+            old, new = pair.split("=", 1)
+            old = old.strip()
+            if old:
+                m[old] = new.strip()
+    return m
+
+
+IDENTITY_MAP = _identity_map()
+
 _ssl_ctx = ssl.create_default_context()
 try:
     import certifi
@@ -418,10 +447,123 @@ def _error_sse(model, message):
 
 
 # ---------------------------------------------------------------------------
+# identity scrub / inspect
+# ---------------------------------------------------------------------------
+import re  # noqa: E402
+
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_HOME_RE = re.compile(r"/(?:Users|home)/[^/\s\"']+")
+# Claude Code injects context as "# fieldName" headers in a system-reminder
+_CTX_RE = re.compile(r"^#\s*(userEmail|currentDate|.*[Dd]irectory|"
+                     r"[Pp]latform|OS Version|git.*)\b.*$", re.MULTILINE)
+
+
+def _walk_text(body):
+    """Yield (setter, text) for every editable text field in system+messages.
+
+    setter(new_text) writes the replacement back into the body in place.
+    """
+    sysv = body.get("system")
+    if isinstance(sysv, str):
+        yield (lambda v: body.__setitem__("system", v)), sysv
+    elif isinstance(sysv, list):
+        for blk in sysv:
+            if isinstance(blk, dict) and isinstance(blk.get("text"), str):
+                yield (lambda v, b=blk: b.__setitem__("text", v)), blk["text"]
+
+    for m in body.get("messages", []):
+        c = m.get("content")
+        if isinstance(c, str):
+            yield (lambda v, mm=m: mm.__setitem__("content", v)), c
+        elif isinstance(c, list):
+            for blk in c:
+                if isinstance(blk, dict) and isinstance(blk.get("text"), str):
+                    yield (lambda v, b=blk: b.__setitem__("text", v)), blk["text"]
+
+
+def _inspect_identity(body):
+    """Collect every identity signal in the outgoing request (pre-scrub)."""
+    emails, homes, ctx = set(), set(), []
+    for _, text in _walk_text(body):
+        emails.update(_EMAIL_RE.findall(text))
+        homes.update(_HOME_RE.findall(text))
+        ctx.extend(l.strip() for l in _CTX_RE.findall(text))
+    return {"emails": sorted(emails), "home_paths": sorted(homes),
+            "context_headers": ctx}
+
+
+def _scrub_identity(body):
+    """Inspect (if SCRUB_LOG) and rewrite (if SCRUB) the payload. Returns #changes.
+
+    Rewrites applied, in order, to every text field in system + messages:
+      1. literal IDENTITY_MAP replacements (company names, arbitrary strings)
+      2. ID_EMAIL   — every email address -> ID_EMAIL   (regex, value-agnostic)
+      3. ID_HOME    — every home-dir username -> ID_HOME (regex, value-agnostic)
+    """
+    if not (SCRUB or SCRUB_LOG):
+        return 0
+    if SCRUB_LOG:
+        report = _inspect_identity(body)
+        try:
+            with open(os.path.expanduser(SCRUB_LOG), "a") as f:
+                f.write("=== identity in request ===\n")
+                f.write(json.dumps(report, indent=2) + "\n")
+        except Exception:
+            pass
+    if not SCRUB:
+        return 0
+    hits = 0
+    for setter, text in _walk_text(body):
+        new = text
+        for old, repl in IDENTITY_MAP.items():
+            if old in new:
+                hits += new.count(old)
+                new = new.replace(old, repl)
+        if ID_EMAIL:
+            new, n = _EMAIL_RE.subn(ID_EMAIL, new)
+            hits += n
+        if ID_HOME:
+            new, n = _HOME_RE.subn(
+                lambda m: re.sub(r"[^/]+$", ID_HOME, m.group(0)), new)
+            hits += n
+        if new != text:
+            setter(new)
+    if hits:
+        _log(f">>> scrub: {hits} replacement(s) applied")
+    return hits
+
+
+# ---------------------------------------------------------------------------
 # mitmproxy hook
 # ---------------------------------------------------------------------------
 class Bridge:
     def request(self, flow: http.HTTPFlow):
+        # transport-layer scrub: strip telemetry headers from anything upstream
+        if SCRUB_HEADERS and flow.request.pretty_host.endswith("anthropic.com"):
+            for h in list(flow.request.headers):
+                if h.lower().startswith("x-stainless-"):
+                    del flow.request.headers[h]
+            if "user-agent" in flow.request.headers:
+                flow.request.headers["user-agent"] = "claude-cli/anon"
+
+        # PASSTHROUGH: scrub identity, then forward to the REAL Anthropic model.
+        # We never set flow.response here, so mitmproxy relays it upstream and
+        # the genuine Claude answers — using Claude Code's own auth token.
+        if PASSTHROUGH:
+            # scrub every Anthropic messages-shaped body (incl. count_tokens) so
+            # nothing identifying reaches Anthropic on any endpoint.
+            if (flow.request.pretty_host.endswith("api.anthropic.com")
+                    and "/v1/messages" in flow.request.path):
+                try:
+                    body = json.loads(flow.request.content or b"{}")
+                except Exception:
+                    return
+                changed = _scrub_identity(body)
+                _apply_prompt_override(body)
+                if changed or SYS_APPEND or SYS_REPLACE:
+                    flow.request.content = json.dumps(body).encode()
+            return
+
         if _is_count(flow):
             try:
                 body = json.loads(flow.request.content or b"{}")
@@ -438,6 +580,7 @@ class Bridge:
         except Exception:
             return
         model = body.get("model", "claude-opus")
+        _scrub_identity(body)
         _apply_prompt_override(body)
         tgt = _pick_model(model)
         _log(f"\n=== {model} -> {tgt}  tools={len(body.get('tools') or [])} "

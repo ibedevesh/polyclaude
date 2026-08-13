@@ -60,11 +60,16 @@ polyclaude --gemini -- -p "explain this repo"
 
 | Provider | Flag | Key env | Default model |
 |---|---|---|---|
+| **Real Anthropic** (passthrough) | `--claude` | claude.ai login or `ANTHROPIC_API_KEY` | as sent |
 | Google Gemini | `--gemini` | `GEMINI_API_KEY` | `gemini-2.5-pro` |
 | OpenAI | `--openai` | `OPENAI_API_KEY` | `gpt-4.1` |
 | Groq | `--groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
 | OpenRouter | `--openrouter` | `OPENROUTER_API_KEY` | `anthropic/claude-3.5-sonnet` |
 | Ollama (local) | `--ollama` | — | `qwen2.5-coder` |
+
+`--claude` doesn't reroute — it passes your turn through to the genuine Anthropic
+model (using Claude Code's own auth) so the bridge can transform requests
+**without changing the model**. Pair it with the [identity scrub](#identity-scrub).
 
 Any model your key can access works via `--model`, including the newest ones
 (Gemini 3.x, GPT-5.x). polyclaude handles the provider-specific details so tool
@@ -95,6 +100,47 @@ polyclaude --gemini --profile ./my-profile.md      # your own file
 
 Bundled profiles: `datascience`, `reviewer`, `concise`. Or replace the whole
 system prompt with `--system path/to/file.md`.
+
+---
+
+## Identity scrub
+
+Claude Code injects context about **you** into every request — your email, your
+working directory, your OS, git state — right into the system prompt the model
+reads. polyclaude can rewrite or strip all of it on the wire, so the model never
+sees who you are. Works with any provider, **including `--claude` (the real
+Anthropic model)**:
+
+```bash
+# talk to the REAL Claude, but with your identity rewritten
+polyclaude --claude --as-email engineering@probo.ai --identity Atlys=Probo
+
+# value-agnostic: replaces EVERY email / home-dir username — no need to know them
+polyclaude --gemini --as-email nobody@example.com --as-user anon
+
+# deep rewrite from a reusable identity file (bundled name or your own .json)
+polyclaude --claude --identity-file probo
+
+# strip transport-layer telemetry too (x-stainless-* headers + user-agent)
+polyclaude --claude --scrub-headers
+
+# just look — log every identity signal each request carries, change nothing
+polyclaude --claude --inspect /tmp/identity.json
+```
+
+| flag | what it does |
+|------|--------------|
+| `--as-email EMAIL` | rewrite every email in the payload (regex, no original needed) |
+| `--as-user NAME` | rewrite every `/Users/<x>` · `/home/<x>` username |
+| `--identity OLD=NEW` | literal replacements (company, name, anything); repeatable/comma-separated |
+| `--identity-file NAME\|PATH` | load a JSON `{ "old": "new" }` map (bundled or your own) |
+| `--scrub-headers` | strip `x-stainless-*` telemetry headers + `user-agent` |
+| `--inspect [PATH]` | log every email / home path / context header per request |
+
+The rewrite happens in the bridge **before** the request leaves your machine, on
+both the `system` prompt and in-message system-reminders. Test it: run
+`polyclaude --claude --identity-file probo`, then ask *"what's my email and
+company?"* — the real Claude answers with the fake identity.
 
 ---
 

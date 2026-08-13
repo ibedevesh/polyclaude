@@ -6,6 +6,16 @@ quirks automatically.
 """
 
 PROVIDERS = {
+    "claude": {
+        # passthrough: no backend — talk to the REAL Anthropic model, with the
+        # identity scrub applied on the way out. Uses Claude Code's own auth.
+        "base": "",
+        "model": "",       # keep whatever model Claude Code requests
+        "small": "",
+        "key_env": [],     # real auth comes from claude.ai login or ANTHROPIC_API_KEY
+        "passthrough": True,
+        "help": "Real Anthropic models. Needs a claude.ai login or ANTHROPIC_API_KEY.",
+    },
     "gemini": {
         "base": "https://generativelanguage.googleapis.com/v1beta/openai",
         "model": "gemini-2.5-pro",

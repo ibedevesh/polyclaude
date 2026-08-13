@@ -16,6 +16,29 @@ from .providers import PROVIDERS
 CA = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem"
 
 
+def _load_identity_file(name_or_path):
+    """Load a JSON {old: new} identity map by bundled name or filesystem path."""
+    import json
+    p = Path(name_or_path).expanduser()
+    if not p.exists():
+        bundled = Path(__file__).parent / "identities" / f"{name_or_path}.json"
+        if bundled.exists():
+            p = bundled
+        else:
+            avail = ", ".join(sorted(
+                f.stem for f in (Path(__file__).parent / "identities").glob("*.json"))
+            ) or "(none)"
+            _die(f"identity file '{name_or_path}' not found. Bundled: {avail} "
+                 f"(or pass a path to a .json file)")
+    try:
+        data = json.loads(p.read_text())
+    except Exception as e:
+        _die(f"could not parse identity file {p}: {e}")
+    if not isinstance(data, dict):
+        _die(f"identity file {p} must be a JSON object of {{\"old\": \"new\"}}")
+    return data
+
+
 def _die(msg, code=1):
     print(f"polyclaude: {msg}", file=sys.stderr)
     sys.exit(code)
@@ -105,6 +128,22 @@ def main(argv=None):
     ap.add_argument("--profile", help="specialize the system prompt "
                     "(bundled name or path to a .md file)")
     ap.add_argument("--system", help="replace the whole main system prompt with this file")
+    # --- identity scrub (works with any provider, incl. --claude passthrough) ---
+    ap.add_argument("--identity", action="append", default=[], metavar="OLD=NEW",
+                    help="literal identity rewrite; repeatable or comma-separated "
+                         "(e.g. --identity atlys=probo,Devesh=Alex)")
+    ap.add_argument("--identity-file", metavar="NAME|PATH",
+                    help="load a JSON {old:new} identity map (bundled name or path)")
+    ap.add_argument("--as-email", metavar="EMAIL",
+                    help="replace EVERY email in the payload with this (no need to "
+                         "know the real one)")
+    ap.add_argument("--as-user", metavar="NAME",
+                    help="replace EVERY home-dir username (/Users/x) with this")
+    ap.add_argument("--scrub-headers", action="store_true",
+                    help="also strip x-stainless-* telemetry headers + user-agent")
+    ap.add_argument("--inspect", nargs="?", const="/tmp/polyclaude-identity.json",
+                    default=None, metavar="PATH",
+                    help="log every identity signal each request carries")
     ap.add_argument("--reasoning", choices=["low", "medium", "high"],
                     help="OpenAI reasoning depth (default high)")
     ap.add_argument("--hue", type=float, default=110.0,
@@ -123,7 +162,8 @@ def main(argv=None):
     if args.list:
         for n, p in PROVIDERS.items():
             key = (p["key_env"][0] if p["key_env"] else "(none)")
-            print(f"  --{n:<11} default {p['model']:<28} key: {key}")
+            model = p["model"] or ("real Anthropic (passthrough)" if p.get("passthrough") else "")
+            print(f"  --{n:<11} default {model:<28} key: {key}")
         return
 
     provider = args.provider or args.provider2 or "gemini"
@@ -144,8 +184,26 @@ def main(argv=None):
     if not mitmdump:
         _die("mitmproxy not found (it is a dependency; try reinstalling polyclaude).")
 
+    passthrough_mode = prov.get("passthrough", False)
+    if passthrough_mode and not _logged_in() and not os.environ.get("ANTHROPIC_API_KEY"):
+        _die("--claude talks to the real Anthropic model, so it needs real auth.\n"
+             "  Log into claude.ai (run `claude` once) or set ANTHROPIC_API_KEY.")
+
+    # assemble the identity rewrite map
+    id_map = {}
+    for item in args.identity:
+        for pair in item.split(","):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                if k.strip():
+                    id_map[k.strip()] = v.strip()
+    if args.identity_file:
+        for k, v in _load_identity_file(args.identity_file).items():
+            id_map[str(k)] = str(v)
+    scrub_on = bool(id_map or args.as_email or args.as_user)
+
     bridge = importlib.util.find_spec("polyclaude.bridge").origin
-    model = args.model or prov["model"]
+    model = args.model or prov["model"] or ("claude" if passthrough_mode else "")
     port = _free_port(args.port)
     log = "/tmp/polyclaude.log"
 
@@ -159,6 +217,20 @@ def main(argv=None):
         "POLYCLAUDE_AUTOCONTINUE": "1",
         "POLYCLAUDE_LOG": log,
     })
+    if passthrough_mode:
+        env["POLYCLAUDE_PASSTHROUGH"] = "1"
+    if scrub_on:
+        env["POLYCLAUDE_SCRUB"] = "1"
+        if id_map:
+            env["POLYCLAUDE_IDENTITY_MAP"] = ",".join(f"{k}={v}" for k, v in id_map.items())
+        if args.as_email:
+            env["POLYCLAUDE_ID_EMAIL"] = args.as_email
+        if args.as_user:
+            env["POLYCLAUDE_ID_HOME"] = args.as_user
+    if args.inspect:
+        env["POLYCLAUDE_SCRUB_LOG"] = os.path.expanduser(args.inspect)
+    if args.scrub_headers:
+        env["POLYCLAUDE_SCRUB_HEADERS"] = "1"
     if args.system:
         sp = Path(args.system).expanduser()
         if not sp.exists():
@@ -232,7 +304,9 @@ def main(argv=None):
     # brand the UI for real interactive sessions; skip only for non-interactive
     # / piped runs (`-p`), which have no welcome screen to brand.
     interactive = not any(a in ("-p", "--print") for a in passthrough)
+    # in passthrough it IS real Claude — leave its branding untouched
     reskin_active = (interactive and sys.stdin.isatty()
+                     and not passthrough_mode
                      and os.environ.get("POLYCLAUDE_NO_RESKIN") != "1")
 
     try:
